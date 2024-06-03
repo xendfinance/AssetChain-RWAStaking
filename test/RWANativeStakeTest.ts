@@ -232,5 +232,43 @@ describe("RWA Native Stake Contract", function(){
     });
 
   });
+
+  describe("Claim Reward Operation", function(){
+
+    it("Should should update reward pool ", async function () {
+      
+      const totalWeightedScoreForWeekFromOracle = 10000;
+      const weekNumberFromOracle = 1;
+
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+      expect(await stakeContract.lastRewardWeek()).to.equal(0);
+      var totalWeightedScore = await stakeContract.totalWeightedScore(0);
+      var rewardDrop = await stakeContract.rewardDrop(0);
+      var apr = await stakeContract.apr();
+
+      const amountToStake = hre.ethers.parseEther("1000"); // Staking 1000 RWA
+
+      await stakeContract.stake(1, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
+
+
+      // console.log("Before Update Pool Call From Oracle: Total Weighted Score: %s, Reward Drop: %s, APR: %s", totalWeightedScore, hre.ethers.formatEther(rewardDrop), apr );
+
+
+      await stakeContract.connect(owner).updatePool(totalWeightedScoreForWeekFromOracle,weekNumberFromOracle);
+      await stakeContract.connect(owner).updatePool(totalWeightedScoreForWeekFromOracle+5000,weekNumberFromOracle+1);
+
+      expect(await stakeContract.lastRewardWeek()).to.equal(2);
+      totalWeightedScore = await stakeContract.totalWeightedScore(0);
+      rewardDrop = await stakeContract.rewardDrop(1);
+      apr = await stakeContract.apr();
+
+
+
+      // console.log("After Update Pool Call From Oracle: Total Weighted Score: %s, Reward Drop: %s, APR: %s", totalWeightedScore, hre.ethers.formatEther(rewardDrop), apr );
+
+    });
+
+  })
   
 });
