@@ -8,7 +8,9 @@ import {
 
   
 describe("RWA Native Stake Contract", function(){
-
+  const ONE_MONTH = 30 * 24 * 60 * 60;
+  const ONE_WEEK =   7 * 24 * 60 * 60;
+  const ONE_DAY =   24 * 60 * 60;
 
     // We define a fixture to reuse the same setup in every test.
     // We use loadFixture to run this setup once, snapshot that state,
@@ -77,18 +79,7 @@ describe("RWA Native Stake Contract", function(){
 
     });
 
-    it("Should allow owner user stake with flexible stake ", async function () {
-      
-      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
-      const amountToStake = hre.ethers.parseEther("1"); // Staking 1 RWA
-      await stakeContract.connect(addr1).stake(0, { value: amountToStake });
-      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(1);
-
-
-    });
-
-
-    it("Should allow another user stake with flexible stake ", async function () {
+    it("Should allow user1 stake with flexible stake ", async function () {
       
       const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
       const amountToStake = hre.ethers.parseEther("1"); // Staking 1 RWA
@@ -100,20 +91,17 @@ describe("RWA Native Stake Contract", function(){
 
     it("Should allow another user do a fixed stake : 3 Months LOCK_PERIOD ", async function () {
       
-      const ONE_MONTH = 30 * 24 * 60 * 60;
 
       const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
       const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
-      await stakeContract.connect(addr1).stake(0, { value: amountToStake });
+      await stakeContract.connect(addr1).stake(1, { value: amountToStake });
       expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(1);
 
       // Advance the blockchain's timestamp by 3 months
 
       var currentBlock = await time.latestBlock();
-      console.log("Current Block Now: %s", currentBlock);
       await time.increase(ONE_MONTH * 3);
       currentBlock = await time.latestBlock();
-      console.log("Current Block Future: %s", currentBlock);
 
       // Now you can test the unstake function
       await stakeContract.connect(addr1).unstake();
@@ -122,8 +110,127 @@ describe("RWA Native Stake Contract", function(){
 
     it("Should not allow user to stake with invalid lock period ", async function () {
        
-      
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+      const amount = hre.ethers.parseEther('1.0');
+      const invalidLockPeriod = 999; // assume 999 is not a valid lock period
+
+      await expect(stakeContract.connect(owner).stake(invalidLockPeriod, { value: amount })).to.be.rejected;
+
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(0);
+
     });
+
+
+    
 });
 
+  describe("Unstake Operation", function(){
+
+    it("Should allow owner to unstake with flexible stake : 0 LOCK_PERIOD", async function () {
+      
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+
+      const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
+
+      await stakeContract.stake(0, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
+      
+      // Advance the blockchain's timestamp by one week to allow unstake after minimum lock time of one week
+
+      var currentBlock = await time.latestBlock();
+      await time.increase(ONE_WEEK);
+      currentBlock = await time.latestBlock();
+
+      // Now you can test the unstake function
+      await stakeContract.connect(owner).unstake();
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(0);
+
+
+    });
+
+    it("Should not allow owner to unstake within minimum lock time on flexible stake : 0 LOCK_PERIOD", async function () {
+      
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+
+      const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
+
+      await stakeContract.stake(0, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
+      
+      // Now you can test the unstake function
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      //  Stake is still active so stakingIDs will still be 1
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
+
+
+    });
+
+
+    it("Should not allow owner to unstake within fixed stake period : 3 Months LOCK_PERIOD", async function () {
+      
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+
+      const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
+
+      await stakeContract.stake(1, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
+      
+      // Now you can test the unstake function
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      //  Stake is still active so stakingIDs will still be 1
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
+
+
+    });
+
+    it("Should allow user to unstake after fixed stake is completed : 6 Months LOCK_PERIOD ", async function () {
+      
+
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+      const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
+      await stakeContract.connect(addr1).stake(2, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(1);
+
+      // Advance the blockchain's timestamp by 6 months
+
+      var currentBlock = await time.latestBlock();
+      await time.increase(ONE_MONTH * 6);
+      currentBlock = await time.latestBlock();
+
+      // Now you can test the unstake function
+      await stakeContract.connect(addr1).unstake();
+      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(0);
+
+
+    });
+
+    it("Should allow owner to force unlock 3 months into 6 months of fixed staking and slash stake amount ", async function () {
+      
+
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+      const amountToStake = hre.ethers.parseEther("10"); // Staking 10 RWA
+      await stakeContract.connect(addr1).stake(2, { value: amountToStake });
+      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(1);
+
+      // Advance the blockchain's timestamp by 3 months
+
+      var currentBlock = await time.latestBlock();
+      await time.increase(ONE_MONTH * 3);
+      currentBlock = await time.latestBlock();
+
+      // Now you can test the unstake function
+      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
+      
+      //  Force Unlock staking ID 1
+      await stakeContract.connect(addr1).forceUnlock(1);
+
+      const deductedBalance = await stakeContract.deductedBalance();
+      console.log("Staked Amount: %s RWA, Deducted Balance: %s",hre.ethers.formatEther(amountToStake),hre.ethers.formatEther(deductedBalance));
+
+      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(0);
+
+    });
+
+  });
+  
 });
