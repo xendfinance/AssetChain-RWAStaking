@@ -11,7 +11,8 @@ describe("RWA Native Stake Contract", function(){
   const ONE_MONTH = 30 * 24 * 60 * 60;
   const ONE_WEEK =   7 * 24 * 60 * 60;
   const ONE_DAY =   24 * 60 * 60;
-
+  const INITIAL_REWARD_DROP = 27500;
+  const MAX_BPS = 10_000n;
     // We define a fixture to reuse the same setup in every test.
     // We use loadFixture to run this setup once, snapshot that state,
     // and reset Hardhat Network to that snapshot in every test.
@@ -20,14 +21,59 @@ describe("RWA Native Stake Contract", function(){
 
       
       const [owner, addr1, addr2] = await hre.ethers.getSigners();
-
-      const rewardDrop = hre.ethers.parseEther("27500");  // Convert 27500 to wei
+    
+      const rewardDrop = hre.ethers.parseEther(INITIAL_REWARD_DROP.toString());  // Convert 27500 to wei
       const stakeContractFactory = await hre.ethers.getContractFactory("RWANativeStake");
       const stakeContract = await stakeContractFactory.deploy(rewardDrop);
 
     
       return { stakeContract, owner, addr1, addr2 };
       
+    }
+
+    async function oracleCall()
+    {
+      console.log("Oracle Start");
+
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+
+      const lastRewardWeek = await stakeContract.lastRewardWeek();
+  
+      //  Oracle Section - To be called 7 days after staking has happened 
+      const START_BLOCK_TIME = await stakeContract.startBlockTime();
+      const lastWeekNumber = lastRewardWeek;
+  
+      const currentBlock = await time.latestBlock();
+      const block = await hre.ethers.provider.getBlock(currentBlock);
+      const currentBlockTime = block?.timestamp;
+      const currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+  
+      const lengthOfStakers = await stakeContract.getLengthOfStakers();
+  
+      console.log("lengthOfStakers: %s", lengthOfStakers);
+
+      for(let i = lastWeekNumber + 1n; i <= currentWeek; i++){
+        let totalScore = 0n;
+        
+        for(let j = 0; j < lengthOfStakers; j++)
+          {
+            const user = await stakeContract.stakers(j);
+            const score = await stakeContract.getWeightedScore(user, i);
+
+            //  add user to db
+            //  add user's score
+
+            totalScore = totalScore + score;
+          }
+  
+          console.log("Total Score: %s", totalScore);
+          // call update pool function per week
+          await stakeContract.updatePool(totalScore, i);
+
+      }
+  
+      console.log("Start BlockTime: %s, Current Block: %s, Current Block Time: %s, Current Week ", Number(START_BLOCK_TIME),  currentBlock, currentBlockTime, currentWeek);
+
     }
 
     describe("Deployment", function(){
@@ -225,50 +271,315 @@ describe("RWA Native Stake Contract", function(){
       await stakeContract.connect(addr1).forceUnlock(1);
 
       const deductedBalance = await stakeContract.deductedBalance();
-      console.log("Staked Amount: %s RWA, Deducted Balance: %s",hre.ethers.formatEther(amountToStake),hre.ethers.formatEther(deductedBalance));
+      // console.log("Staked Amount: %s RWA, Deducted Balance: %s",hre.ethers.formatEther(amountToStake),hre.ethers.formatEther(deductedBalance));
 
+      expect(deductedBalance).to.be.greaterThan(0);
       expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(0);
 
     });
 
   });
 
-  describe("Claim Reward Operation", function(){
 
-    it("Should should update reward pool ", async function () {
+  describe("APR Operation", async function(){
+
+    it("Should calculate APR change after one week and oracle call", async function(){
       
-      const totalWeightedScoreForWeekFromOracle = 10000;
-      const weekNumberFromOracle = 1;
-
       const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
-      expect(await stakeContract.lastRewardWeek()).to.equal(0);
-      var totalWeightedScore = await stakeContract.totalWeightedScore(0);
-      var rewardDrop = await stakeContract.rewardDrop(0);
-      var apr = await stakeContract.apr();
+      var ownerBalance = await hre.ethers.provider.getBalance(owner.getAddress());
 
-      const amountToStake = hre.ethers.parseEther("1000"); // Staking 1000 RWA
+      console.log("Owner Balance: %s ",hre.ethers.formatEther(ownerBalance));
 
-      await stakeContract.stake(1, { value: amountToStake });
+      //  1. Stake
+      const amountToStake = hre.ethers.parseEther("9000"); // Staking 9,000 RWA
+      await stakeContract.stake(0, { value: amountToStake });
+      expect(await stakeContract.deposits(1)).to.equal(amountToStake);
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
-
-
-      // console.log("Before Update Pool Call From Oracle: Total Weighted Score: %s, Reward Drop: %s, APR: %s", totalWeightedScore, hre.ethers.formatEther(rewardDrop), apr );
-
-
-      await stakeContract.connect(owner).updatePool(totalWeightedScoreForWeekFromOracle,weekNumberFromOracle);
-      await stakeContract.connect(owner).updatePool(totalWeightedScoreForWeekFromOracle+5000,weekNumberFromOracle+1);
-
-      expect(await stakeContract.lastRewardWeek()).to.equal(2);
-      totalWeightedScore = await stakeContract.totalWeightedScore(0);
-      rewardDrop = await stakeContract.rewardDrop(1);
-      apr = await stakeContract.apr();
+      expect(await stakeContract.totalStaked()).to.equal(amountToStake);
 
 
 
-      // console.log("After Update Pool Call From Oracle: Total Weighted Score: %s, Reward Drop: %s, APR: %s", totalWeightedScore, hre.ethers.formatEther(rewardDrop), apr );
+      //  2. Before oracle is called, check initial reward drop of current week, lastrewardweek, current week,  total weighted score of lastreward week, apr, staking score
+      const START_BLOCK_TIME = await stakeContract.startBlockTime();
+      var lastRewardWeek = await stakeContract.lastRewardWeek();
+
+  
+      var currBlock = await time.latestBlock();
+      var block = await hre.ethers.provider.getBlock(currBlock);
+      var currentBlockTime = block?.timestamp;
+      var currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+      var lastWeekNumber = currentWeek > 0n ? currentWeek : 0n;
+
+      const firstRewardDrop = await stakeContract.rewardDrop(0);
+      var totalWeightedScore = await stakeContract.totalWeightedScore(lastRewardWeek);
+      var apr = await stakeContract.apr();
+      var initialUserStakingScore = await stakeContract.getWeightedScore(owner.address, currentWeek);
+
+      console.log("First Reward Drop: %s ",hre.ethers.formatEther(firstRewardDrop));
+
+
+      expect(firstRewardDrop).to.equal(hre.ethers.parseEther(INITIAL_REWARD_DROP.toString()));
+      expect(currentWeek).to.equal(0);
+      expect(lastRewardWeek).to.equal(0);
+      expect(totalWeightedScore).to.equal(0);
+      expect(apr).to.equal(2000);
+      expect(initialUserStakingScore).to.greaterThan(0);
+
+      //  3. Advance blockchain by one week  and then trigger the oracle
+      var currentBlock = await time.latestBlock();
+      await time.increase(ONE_WEEK);
+      currentBlock = await time.latestBlock();
+
+      block = await hre.ethers.provider.getBlock(currentBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+
+      expect(currentWeek).to.equal(1);
+      
+      //  4. Call Oracle - To be called 7 days after staking has happened 
+      
+      const lengthOfStakers = await stakeContract.getLengthOfStakers();
+  
+      for(let i = lastWeekNumber + 1n; i <= currentWeek; i++){
+        let totalScore = 0n;
+        
+        for(let j = 0; j < lengthOfStakers; j++)
+          {
+            const user = await stakeContract.stakers(j);
+            const score = await stakeContract.getWeightedScore(user, i);
+
+            //  add user to db
+            //  add user's score
+
+            totalScore = totalScore + score;
+          }
+  
+          // call update pool function per week
+          await stakeContract.updatePool(totalScore, i);
+
+      }
+
+      //  5. After oracle is called, check reward drop current week, lastrewardweek, current week, total weighted score of lastreward week, apr 
+
+      lastRewardWeek = await stakeContract.lastRewardWeek();  
+      currBlock = await time.latestBlock();
+      block = await hre.ethers.provider.getBlock(currBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+      lastWeekNumber = currentWeek - 1n;                   //  
+      var currentWeekRewardDrop = await stakeContract.rewardDrop(currentWeek);
+      var lastWeekRewardDrop = await stakeContract.rewardDrop(lastWeekNumber);
+      totalWeightedScore = await stakeContract.totalWeightedScore(lastWeekNumber);
+      var newapr = await stakeContract.apr() ;
+      var finalUserStakingScore = await stakeContract.getWeightedScore(owner.address, currentWeek);
+
+      console.log("Last Reward Week: %s, Current Week:%s, Current Week Reward Drop: %s,  Last Week Reward Drop: %s , Total Weighted Score: %s, APR: %s",
+      lastRewardWeek,currentWeek,currentWeekRewardDrop,hre.ethers.formatEther(lastWeekRewardDrop),totalWeightedScore,newapr);
+
+
+      expect(currentWeek).to.equal(1);
+      expect(totalWeightedScore).to.greaterThan(0);
+      expect(newapr).to.lessThan(2000);
+      expect(finalUserStakingScore).to.greaterThan(initialUserStakingScore);      // final should be greater since time has passed between staking time and now
+
 
     });
 
+    it("Should calculate APR change after one week , oracle call , updating reward drop , another week and another oracle call ", async function(){
+      
+      const { stakeContract, owner, addr1 } = await loadFixture(deployContractFixture);
+      var ownerBalance = await hre.ethers.provider.getBalance(owner.getAddress());
+
+      console.log("Owner Balance: %s ",hre.ethers.formatEther(ownerBalance));
+
+      //  1. Stake
+      const amountToStake = hre.ethers.parseEther("9000"); // Staking 9,000 RWA
+      await stakeContract.stake(0, { value: amountToStake });
+      expect(await stakeContract.deposits(1)).to.equal(amountToStake);
+      expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
+      expect(await stakeContract.totalStaked()).to.equal(amountToStake);
+
+
+      //  2. Before oracle is called, check initial reward drop of current week, lastrewardweek, current week,  total weighted score of lastreward week, apr 
+      const START_BLOCK_TIME = await stakeContract.startBlockTime();
+      var lastRewardWeek = await stakeContract.lastRewardWeek();
+
+  
+      var currBlock = await time.latestBlock();
+      var block = await hre.ethers.provider.getBlock(currBlock);
+      var currentBlockTime = block?.timestamp;
+      var currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+      var lastWeekNumber = currentWeek > 0n ? currentWeek : 0n;
+
+      const firstRewardDrop = await stakeContract.rewardDrop(0);
+      var totalWeightedScore = await stakeContract.totalWeightedScore(lastRewardWeek);
+      var apr = await stakeContract.apr();
+
+      console.log("First Reward Drop: %s ",hre.ethers.formatEther(firstRewardDrop));
+
+
+      expect(firstRewardDrop).to.equal(hre.ethers.parseEther(INITIAL_REWARD_DROP.toString()));
+      expect(currentWeek).to.equal(0);
+      expect(lastRewardWeek).to.equal(0);
+      expect(totalWeightedScore).to.equal(0);
+      expect(apr).to.equal(2000);
+
+
+      //  3. Advance blockchain by one week  and then trigger the oracle
+      var currentBlock = await time.latestBlock();
+      await time.increase(ONE_WEEK);
+      currentBlock = await time.latestBlock();
+
+      block = await hre.ethers.provider.getBlock(currentBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+
+      expect(currentWeek).to.equal(1);
+      
+      //  4. Call Oracle - To be called 7 days after staking has happened 
+      
+      var lengthOfStakers = await stakeContract.getLengthOfStakers();
+  
+      for(let i = lastWeekNumber + 1n; i <= currentWeek; i++){
+        let totalScore = 0n;
+        
+        for(let j = 0; j < lengthOfStakers; j++)
+          {
+            const user = await stakeContract.stakers(j);
+            const score = await stakeContract.getWeightedScore(user, i);
+
+            //  add user to db
+            //  add user's score
+
+            totalScore = totalScore + score;
+          }
+  
+          // call update pool function per week
+          await stakeContract.updatePool(totalScore, i);
+
+      }
+
+      //  5. After oracle is called, check reward drop current week, lastrewardweek, current week, total weighted score of lastreward week, apr 
+
+      lastRewardWeek = await stakeContract.lastRewardWeek();  
+      currBlock = await time.latestBlock();
+      block = await hre.ethers.provider.getBlock(currBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+      lastWeekNumber = currentWeek - 1n;                   //  
+      var currentWeekRewardDrop = await stakeContract.rewardDrop(currentWeek);
+      var lastWeekRewardDrop = await stakeContract.rewardDrop(lastWeekNumber);
+      totalWeightedScore = await stakeContract.totalWeightedScore(lastWeekNumber);
+      var newapr = await stakeContract.apr() ;
+
+
+      console.log("Last Reward Week: %s, Current Week:%s, Current Week Reward Drop: %s,  Last Week Reward Drop: %s , Total Weighted Score: %s, APR: %s",
+      lastRewardWeek,currentWeek,currentWeekRewardDrop,hre.ethers.formatEther(lastWeekRewardDrop),totalWeightedScore,newapr);
+
+
+      expect(currentWeek).to.equal(1);
+      expect(totalWeightedScore).to.greaterThan(0);
+      expect(newapr).to.lessThan(2000);
+
+
+      //  6. Stake again with another user
+
+      const addr1amountToStake = hre.ethers.parseEther("9000"); // Staking 9,000 RWA
+      await stakeContract.connect(addr1).stake(0, { value: addr1amountToStake });
+
+      expect(await stakeContract.deposits(2)).to.equal(addr1amountToStake);
+      expect(await stakeContract.getStakingIds(addr1.address)).to.have.lengthOf(1);
+      expect(await stakeContract.totalStaked()).to.equal(amountToStake+addr1amountToStake);
+
+
+      //  6. Update the reward drop
+
+      await stakeContract.setRewardDrop(hre.ethers.parseEther("60"));         //  set the reward drop to an amount that will fall within MIN_APR and MAX_APR. This reward drop should be small because this is just one week into staking program with a small amount staked.
+      var updatedCurrentWeekRewardDrop = await stakeContract.rewardDrop(currentWeek);
+      expect(updatedCurrentWeekRewardDrop).to.greaterThan(currentWeekRewardDrop);
+
+
+
+      //  7. Advance blockchain for another one week
+
+      currentBlock = await time.latestBlock();
+      await time.increase(ONE_WEEK);
+      currentBlock = await time.latestBlock();
+
+      block = await hre.ethers.provider.getBlock(currentBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+
+      expect(currentWeek).to.equal(2);
+
+      //  8. Call Oracle Again
+
+      lengthOfStakers = await stakeContract.getLengthOfStakers();
+  
+      lastWeekNumber = currentWeek - 1n;
+
+      for(let i = lastWeekNumber + 1n; i <= currentWeek; i++){
+        let totalScore = 0n;
+        
+        for(let j = 0; j < lengthOfStakers; j++)
+          {
+            const user = await stakeContract.stakers(j);
+            const score = await stakeContract.getWeightedScore(user, i);
+
+            //  add user to db
+            //  add user's score
+
+            totalScore = totalScore + score;
+          }
+  
+          // call update pool function per week
+          await stakeContract.updatePool(totalScore, i);
+
+      }
+
+      expect(lengthOfStakers).to.equal(2);
+
+
+
+      //  9. Get the APR : After oracle is called, check reward drop current week, lastrewardweek, current week, total weighted score of lastreward week, apr 
+
+      lastRewardWeek = await stakeContract.lastRewardWeek();  
+      currBlock = await time.latestBlock();
+      block = await hre.ethers.provider.getBlock(currBlock);
+      currentBlockTime = block?.timestamp;
+      currentWeek = BigInt(Math.floor(Number(BigInt(currentBlockTime || 0) - START_BLOCK_TIME) / Number(BigInt(ONE_WEEK))));
+      lastWeekNumber = currentWeek - 1n;                   //  
+      var currentWeekRewardDrop = await stakeContract.rewardDrop(currentWeek);
+      var lastWeekRewardDrop = await stakeContract.rewardDrop(lastWeekNumber);
+      totalWeightedScore = await stakeContract.totalWeightedScore(lastWeekNumber);
+      var newapr = await stakeContract.apr() ;
+
+
+      console.log("After 2 weeks Oracle call: Last Reward Week: %s, Current Week:%s, Current Week Reward Drop: %s,  Last Week Reward Drop: %s , Total Weighted Score: %s, APR: %s",
+      lastRewardWeek,currentWeek,currentWeekRewardDrop,hre.ethers.formatEther(lastWeekRewardDrop),totalWeightedScore,newapr);
+
+
+      expect(currentWeek).to.equal(2);
+      expect(totalWeightedScore).to.greaterThan(0);
+      expect(newapr).to.lessThan(2000);
+      expect(lastWeekRewardDrop).to.equal(hre.ethers.parseEther("60"));      //  Reward drop should equal what we set above
+
+
+      //  Final Note: 
+      //  It is important to understand that  the update of the reward drop actually reduced the overall APR which is correct
+      //  The APR will only take effect after the updatepool function is called
+      //  The reward drop dropped drastically from 27,500 to 60 because we specified a 20% MAX_APR, two stakers and then only 2 weeks out of the entire year. 
+      //  This means that for the first 27,500 was extremely high but it not a problem as this amount will still be distributed to the stakers
+
+
+    });
+
+
+  });
+  describe("Claim Reward Operation", function(){
+
   })
+
+
   
 });

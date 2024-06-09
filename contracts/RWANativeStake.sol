@@ -2,6 +2,8 @@
 
 pragma solidity 0.6.12;
 
+// import "hardhat/console.sol";
+
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -295,7 +297,7 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    */
   function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) external onlyGovernment {
     require(weekNumber > lastRewardWeek, "invalid call");
-    
+        
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
       totalWeightedScore[i-1] = _totalWeightedScore;
       if (i > 1 && rewardDrop[i-1] == 0) {
@@ -311,12 +313,16 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
       
       if (_apr > MAX_APR) {
         rewardDrop[i-1] = totalStaked.mul(MAX_APR).div(WEEKS_OF_ONE_YEAR).div(MAX_BPS);
+
       } else if (_apr < MIN_APR) {
         rewardDrop[i-1] = totalStaked.mul(MIN_APR).div(WEEKS_OF_ONE_YEAR).div(MAX_BPS).add(1);
       }
+
     }
 
     lastRewardWeek = weekNumber;
+
+
   }
 
   //////////////////////////////////////
@@ -434,7 +440,6 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     require(_apr <= MAX_APR, "not meet MAX APR");
     uint256 current = block.timestamp.sub(startBlockTime).div(ONE_WEEK);
     rewardDrop[current] = _rewardDrop;
-
     emit RewardDropUpdated(_rewardDrop, current);
   }
 
@@ -496,6 +501,7 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
       uint256 stakingId = stakingIds[i];
       uint256 _score = getScore(stakingId, weekNumber);
       score = score.add(_score);
+
     }
 
     // calculate the weighted score
