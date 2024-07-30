@@ -5,6 +5,10 @@ import {
   import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
   import { expect } from "chai";
   import hre from "hardhat";
+  import { ethers, upgrades } from "hardhat";
+
+  
+  // Import upgrades from @openzeppelin/hardhat-upgrades
 
   
 describe("RWA Native Stake Contract", function(){
@@ -19,14 +23,18 @@ describe("RWA Native Stake Contract", function(){
 
     async function deployContractFixture(){
 
-      
+
       const [owner, addr1, addr2] = await hre.ethers.getSigners();
     
       const rewardDrop = hre.ethers.parseEther(INITIAL_REWARD_DROP.toString());  // Convert 27500 to wei
       const stakeContractFactory = await hre.ethers.getContractFactory("RWANativeStake");
-      const stakeContract = await stakeContractFactory.deploy(rewardDrop,owner);
 
-    
+      const stakeContract = await upgrades.deployProxy(stakeContractFactory, [rewardDrop,owner.address], {initializer: "initialize"});
+
+      // const stakeContract = await stakeContractFactory.deploy(rewardDrop,owner);
+
+      console.log("RWANativeStake deployed to:", stakeContract.address);
+
       return { stakeContract, owner, addr1, addr2 };
       
     }
