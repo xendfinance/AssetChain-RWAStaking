@@ -31,9 +31,8 @@ describe("RWA Native Stake Contract", function(){
 
       const stakeContract = await upgrades.deployProxy(stakeContractFactory, [rewardDrop,owner.address,], {initializer: "initialize"});
 
-      // const stakeContract = await stakeContractFactory.deploy(rewardDrop,owner);
-
-      console.log("RWANativeStake deployed to:", stakeContract.address);
+      // console.log(stakeContract);
+      console.log("RWANativeStake Proxy deployed to:", stakeContract.target);
 
       return { stakeContract, owner, addr1, addr2 };
       
@@ -584,9 +583,29 @@ describe("RWA Native Stake Contract", function(){
 
 
   });
+
+  describe("Upgrade Contract", function(){
+
+      it("Should upgrade contract and call the function in new contract implementation", async function(){
+
+        //  Deploy the initial implementation:
+        const { stakeContract, owner } = await loadFixture(deployContractFixture);
+
+        //  Upgrade to a new implementation:
+        const RWANativeStakeV2 = await ethers.getContractFactory("RWANativeStakeV2");
+        const upgraded = await upgrades.upgradeProxy(await stakeContract.target, RWANativeStakeV2);
+
+        console.log("Proxy upgraded at:", upgraded.target);
+
+        expect(await upgraded.version()).to.equal("v2");
+        expect(await stakeContract.target).to.equal(upgraded.target);
+
+      });
+  });
+
   describe("Claim Reward Operation", function(){
 
-  })
+  });
 
 
   
