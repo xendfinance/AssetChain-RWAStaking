@@ -219,31 +219,27 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
     require(treasury > 0, "reward pool is empty");
     
     uint256 claimed;
+    uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
+
     if (unclaimed[_msgSender()] > 0) {
-      require(unclaimed[_msgSender()] <= treasury, "insufficient");
-      claimed = unclaimed[_msgSender()];
-      (bool success, ) = _msgSender().call{value: claimed}("");
-      require(success, "Transfer failed.");
-
+      reward += unclaimed[_msgSender()];
       delete unclaimed[_msgSender()];
-    } else {
-      uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
-      require(reward > 0, "pending reward amount is zero");
-
-      if (reward >= treasury) {
-        reward = treasury;
-        treasury = 0;
-      } else {
-        treasury -= reward;
-      }
-      
-      claimed = reward;
-      (bool success, ) = _msgSender().call{value: claimed}("");
-      require(success, "Transfer failed.");
-
-      userInfo[_msgSender()].rewardDebt += reward;
     }
-    
+
+    if (reward > treasury) {
+      claimed = treasury;
+      unclaimed[_msgSender()] = reward - treasury;
+      treasury = 0;
+    } else {
+      claimed = reward;
+      treasury -= reward;
+    }
+
+    (bool success, ) = _msgSender().call{value: claimed}("");
+    require(success, "Transfer failed.");
+
+    userInfo[_msgSender()].rewardDebt += claimed;
+
     emit RewardClaim(_msgSender(), claimed);
   }
 

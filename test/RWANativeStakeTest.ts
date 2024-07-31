@@ -29,7 +29,7 @@ describe("RWA Native Stake Contract", function(){
       const rewardDrop = hre.ethers.parseEther(INITIAL_REWARD_DROP.toString());  // Convert 27500 to wei
       const stakeContractFactory = await hre.ethers.getContractFactory("RWANativeStake");
 
-      const stakeContract = await upgrades.deployProxy(stakeContractFactory, [rewardDrop,owner.address], {initializer: "initialize"});
+      const stakeContract = await upgrades.deployProxy(stakeContractFactory, [rewardDrop,owner.address,], {initializer: "initialize"});
 
       // const stakeContract = await stakeContractFactory.deploy(rewardDrop,owner);
 
