@@ -14,8 +14,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  */
 contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
 
-  // using ERC20Upgradeable for IERC20;
-
   struct UserInfo {
     uint256[] stakingIds;
     uint256 lastStakeTime;
