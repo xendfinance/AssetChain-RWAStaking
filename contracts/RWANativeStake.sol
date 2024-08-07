@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -288,8 +288,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    * @param _totalWeightedScore total weighted score
    * @param weekNumber the week counter
    */
-  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
+  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) onlyGovernment external {
     require(weekNumber > lastRewardWeek, "invalid call");
         
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
