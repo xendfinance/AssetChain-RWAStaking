@@ -211,7 +211,8 @@ describe("RWA Native Stake Contract", function(){
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
       
       // Now you can test the unstake function
-      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      // await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWithCustomError(stakeContract, "CannotUnstakeWithinMinimumLockTime"); // Replace with the actual custom error name
       //  Stake is still active so stakingIDs will still be 1
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
 
@@ -229,7 +230,9 @@ describe("RWA Native Stake Contract", function(){
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
       
       // Now you can test the unstake function
-      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      // await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWithCustomError(stakeContract, "CannotUnstakeWithinMinimumLockTime"); // Replace with the actual custom error name
+
       //  Stake is still active so stakingIDs will still be 1
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
 
@@ -272,8 +275,9 @@ describe("RWA Native Stake Contract", function(){
       currentBlock = await time.latestBlock();
 
       // Now you can test the unstake function
-      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
-      
+      // await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
+      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWithCustomError(stakeContract, "LockedStatus");
+
       //  Force Unlock staking ID 1
       await stakeContract.connect(addr1).forceUnlock(1);
 

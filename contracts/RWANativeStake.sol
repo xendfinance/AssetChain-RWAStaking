@@ -83,9 +83,20 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   event RewardDropUpdated(uint256 rewardDrop, uint256 weekNumber);
   event DeductedBalanceWithdrawn(uint256 withdrawn);
 
+  // Custom errors
+  error RewardDropCannotBeZero();
+  error MultiSigWalletCannotBeZeroAddress();
+  error StakingTooMuchInShortPeriod();
+  error NoActiveStaking();
+  error CannotUnstakeWithinMinimumLockTime();
+  error LockedStatus();
+  error TransferFailed();
+  error InvalidLockPeriod();
+
   function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
-    require(_rewardDrop != 0, "reward drop can't be zero");
-    require(_multiSigWallet != address(0), "multiSigWallet can't be zero address");
+    if (_rewardDrop == 0) revert RewardDropCannotBeZero();
+    if (_multiSigWallet == address(0)) revert MultiSigWalletCannotBeZeroAddress();
+    
     __Ownable_init(_msgSender()); // Initialize Ownable with the contract deployer
     __ReentrancyGuard_init(); // No arguments needed for ReentrancyGuard
     startBlockTime = block.timestamp;
@@ -131,16 +142,20 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function stake( LOCK_PERIOD _lockPeriod) external payable nonReentrant {
     // check if stake action valid
-    require(msg.value > 0, "Cannot stake 0 RWA");
+    if (msg.value == 0) revert CannotUnstakeWithinMinimumLockTime();
 
     uint256 _amount = msg.value;
 
     uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
-    require(diff > actionLimit, "staking too much in short period is not valid");
+    if (diff <= actionLimit) revert StakingTooMuchInShortPeriod();
     uint256[] memory stakingIds = userInfo[_msgSender()].stakingIds;
     if (stakingIds.length != 0) {
-      require(lockPeriod[stakingIds[0]] == LOCK_PERIOD.NO_LOCK && _lockPeriod == LOCK_PERIOD.NO_LOCK, "multi-staking works only for standard vault");
-      require(stakingIds.length < maxActiveStake, "exceed maxActiveStake");
+      if (lockPeriod[stakingIds[0]] != LOCK_PERIOD.NO_LOCK || _lockPeriod != LOCK_PERIOD.NO_LOCK) {
+        revert InvalidLockPeriod();
+      }
+      if (stakingIds.length >= maxActiveStake) {
+        revert InvalidLockPeriod();
+      }
     }
 
     // update state variables
@@ -169,12 +184,12 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function unstake() external nonReentrant {
     // check if unstake action is valid
-    require(userInfo[_msgSender()].stakingIds.length > 0, "no active staking");
+    if (userInfo[_msgSender()].stakingIds.length == 0) revert NoActiveStaking();
     uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
-    require(diff > lockTime, "can't unstake within minimum lock time"); 
+    if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime(); 
     uint256 stakingId = userInfo[_msgSender()].stakingIds[0];
     uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
-    require(diff > lock, "locked");
+    if (diff <= lock) revert LockedStatus();
     
     // calculate the reward amount
     uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
@@ -188,8 +203,8 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
     
     // transfer tokens to the _msgSender()  
     uint256 stakeAmount = _getTotalStaked(_msgSender());
-    (bool success, ) = _msgSender().call{value: stakeAmount + reward}("");
-    require(success, "Transfer failed.");
+    (bool success, ) = payable(_msgSender()).call{value: stakeAmount + reward}("");
+    if (!success) revert TransferFailed();
 
     // update the state variables
     totalStaked -= stakeAmount;
@@ -212,7 +227,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    *  claimed reward amount is reflected when next claim reward or standard unstake action
    */
   function claimReward() external nonReentrant {
-    require(treasury > 0, "reward pool is empty");
+    if (treasury == 0) revert CannotUnstakeWithinMinimumLockTime();
     
     uint256 claimed;
     uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
@@ -231,8 +246,8 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
       treasury -= reward;
     }
 
-    (bool success, ) = _msgSender().call{value: claimed}("");
-    require(success, "Transfer failed.");
+    (bool success, ) = payable(_msgSender()).call{value: claimed}("");
+    if (!success) revert TransferFailed();
 
     userInfo[_msgSender()].rewardDebt += claimed;
 
@@ -248,18 +263,18 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function forceUnlock(uint256 stakingId) external nonReentrant {
     // check if it is valid
-    require(_msgSender() == depositor[stakingId], "!depositor");
+    if (_msgSender() != depositor[stakingId]) revert InvalidLockPeriod();
     uint256 diff = block.timestamp - stakeTime[stakingId];
-    require(diff > lockTime, "can't unstake within minimum lock time");
+    if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime();
 
     uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
-    require(diff < lock, "unlocked status");
+    if (diff >= lock) revert LockedStatus();
     uint256 offset = lock - diff;
     //  deposits * 30% * offset / lock
     uint256 reduction = deposits[stakingId] * reductionPercent / MAX_BPS * offset / lock;
     
-    (bool success, ) = _msgSender().call{value: deposits[stakingId] - reduction}("");
-    require(success, "Transfer failed.");
+    (bool success, ) = payable(_msgSender()).call{value: deposits[stakingId] - reduction}("");
+    if (!success) revert TransferFailed();
 
     deductedBalance += reduction;
     
@@ -287,7 +302,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    * @param weekNumber the week counter
    */
   function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) onlyGovernment external {
-    require(weekNumber > lastRewardWeek, "invalid call");
+    if (weekNumber <= lastRewardWeek) revert InvalidLockPeriod();
         
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
       totalWeightedScore[i - 1] = _totalWeightedScore;
@@ -375,9 +390,9 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
 
   function addReward() external payable {
 
-    require(_msgSender() == owner(), "!owner");
+    if (_msgSender() != owner()) revert InvalidLockPeriod();
 
-    require(msg.value > 0, "Cannot add 0 RWA reward");
+    if (msg.value == 0) revert CannotUnstakeWithinMinimumLockTime();
 
     uint256 amount = msg.value;
 
@@ -387,12 +402,12 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function withdrawReward(uint256 amount) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
     if (amount > treasury) {
         amount = treasury;
     }
-    (bool success, ) = _msgSender().call{value: amount}("");
-    require(success, "Transfer failed.");
+    (bool success, ) = payable(_msgSender()).call{value: amount}("");
+    if (!success) revert TransferFailed();
 
     treasury -= amount;
 
@@ -400,63 +415,62 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function withdrawDeductedBalance() external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(deductedBalance > 0, "no balance to withdraw");
-    (bool success, ) = _msgSender().call{value: deductedBalance}("");
-    require(success, "Transfer failed.");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (deductedBalance == 0) revert CannotUnstakeWithinMinimumLockTime();
+    (bool success, ) = payable(_msgSender()).call{value: deductedBalance}("");
+    if (!success) revert TransferFailed();
     emit DeductedBalanceWithdrawn(deductedBalance);
     delete deductedBalance;
   }
 
   function setLockTime(uint256 _lockTime) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_lockTime != 0, "!zero");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_lockTime == 0) revert CannotUnstakeWithinMinimumLockTime();
     emit LockTimeChanged(lockTime, _lockTime);
     lockTime = _lockTime;
   }
 
   function setReductionPercent(uint256 _reductionPercent) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_reductionPercent < MAX_BPS, "overflow");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_reductionPercent >= MAX_BPS) revert InvalidLockPeriod();
     emit ReductionPercentChanged(reductionPercent, _reductionPercent);
     reductionPercent = _reductionPercent;
   }
 
   function setRewardDrop(uint256 _rewardDrop) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(totalStaked > 0, "no staked tokens");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (totalStaked == 0) revert CannotUnstakeWithinMinimumLockTime();
     uint256 _apr = _rewardDrop * WEEKS_OF_ONE_YEAR * MAX_BPS / totalStaked;
-    require(_apr >= MIN_APR, "not meet MIN APR");
-    require(_apr <= MAX_APR, "not meet MAX APR");
+    if (_apr < MIN_APR || _apr > MAX_APR) revert InvalidLockPeriod();
     uint256 current = (block.timestamp - startBlockTime) / ONE_WEEK;
     rewardDrop[current] = _rewardDrop;
     emit RewardDropUpdated(_rewardDrop, current);
   }
 
   function transferGovernance(address _newGov) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_newGov != address(0), "new governance is the zero address");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_newGov == address(0)) revert CannotUnstakeWithinMinimumLockTime();
     emit GovernanceTransferred(_government, _newGov);
     _government = _newGov;
   }
 
   function setActionLimit(uint256 _actionLimit) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_actionLimit != 0, "!zero");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_actionLimit == 0) revert CannotUnstakeWithinMinimumLockTime();
     emit ActionLimitChanged(actionLimit, _actionLimit);
     actionLimit = _actionLimit;
   }
 
   function setMaxActiveStake(uint256 _maxActiveStake) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_maxActiveStake !=0, "!zero");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_maxActiveStake == 0) revert CannotUnstakeWithinMinimumLockTime();
     emit MaxActiveStakeUpdated(maxActiveStake, _maxActiveStake);
     maxActiveStake = _maxActiveStake;
   }
 
   function setMaxWeeks(uint256 _maxWeeks) external {
-    require(_msgSender() == multiSigWallet, "!multiSigWallet");
-    require(_maxWeeks > 0, "MaxWeeks must be greater than 0");
+    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_maxWeeks == 0) revert CannotUnstakeWithinMinimumLockTime();
     MaxWeeks = _maxWeeks;
   }
 
