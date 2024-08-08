@@ -92,6 +92,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   error LockedStatus();
   error TransferFailed();
   error InvalidLockPeriod();
+  error CannotClaimZeroReward();
 
   function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
     if (_rewardDrop == 0) revert RewardDropCannotBeZero();
@@ -229,6 +230,11 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   function claimReward() external nonReentrant {
     if (treasury == 0) revert CannotUnstakeWithinMinimumLockTime();
     
+    // Check if the user has any staked tokens
+    if (userInfo[_msgSender()].stakingIds.length == 0) {
+        revert NoActiveStaking(); // Or handle as needed
+    }
+
     uint256 claimed;
     uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
 
@@ -236,6 +242,9 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
       reward += unclaimed[_msgSender()];
       delete unclaimed[_msgSender()];
     }
+
+    // Check if the reward is zero and revert if so
+    if (reward == 0) revert CannotClaimZeroReward(); 
 
     if (reward > treasury) {
       claimed = treasury;
