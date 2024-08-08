@@ -84,15 +84,31 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   event DeductedBalanceWithdrawn(uint256 withdrawn);
 
   // Custom errors
+  error StakedAmountCannotBeZero();
+  error MultipleStakingTypesNotAllowed();
+  error ExceededMaxActiveStake();
+  error ExceededActionLimit();
+  error CannotUnstakeWithinMinimumLockTime();
+  error StakingIsLocked();
+  error TransferFailed();
+  error CannotClaimZeroReward();
+  error StakingIsUnlocked();
+  error LockTimeCannotBeZero();
+  error TreasuryIsEmpty();
+  error NotDepositor(address sender);
+  error WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(uint256 newWeek, uint256 lastUpdated);
+  error NotOwner(address sender);
+  error AmountCannotBeZero();
+  error CannotAddZeroReward();
+  error ReductionPercentTooHigh();
+  error APRIsNotBetweenMinumumandMaximumAPR();
+  error NotMultiSig(address sender);
+  error DeductedBalanceIsZero();
+  error NewValueCannotBeZero();
+  error NoStakedTokens();
+  error NewGovernmentAddressCannotBeZero();
   error RewardDropCannotBeZero();
   error MultiSigWalletCannotBeZeroAddress();
-  error StakingTooMuchInShortPeriod();
-  error NoActiveStaking();
-  error CannotUnstakeWithinMinimumLockTime();
-  error LockedStatus();
-  error TransferFailed();
-  error InvalidLockPeriod();
-  error CannotClaimZeroReward();
 
   function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
     if (_rewardDrop == 0) revert RewardDropCannotBeZero();
@@ -143,19 +159,19 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function stake( LOCK_PERIOD _lockPeriod) external payable nonReentrant {
     // check if stake action valid
-    if (msg.value == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (msg.value == 0) revert StakedAmountCannotBeZero();
 
     uint256 _amount = msg.value;
 
     uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
-    if (diff <= actionLimit) revert StakingTooMuchInShortPeriod();
+    if (diff <= actionLimit) revert ExceededActionLimit();
     uint256[] memory stakingIds = userInfo[_msgSender()].stakingIds;
     if (stakingIds.length != 0) {
       if (lockPeriod[stakingIds[0]] != LOCK_PERIOD.NO_LOCK || _lockPeriod != LOCK_PERIOD.NO_LOCK) {
-        revert InvalidLockPeriod();
+        revert MultipleStakingTypesNotAllowed();
       }
       if (stakingIds.length >= maxActiveStake) {
-        revert InvalidLockPeriod();
+        revert ExceededMaxActiveStake();
       }
     }
 
@@ -185,12 +201,12 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function unstake() external nonReentrant {
     // check if unstake action is valid
-    if (userInfo[_msgSender()].stakingIds.length == 0) revert NoActiveStaking();
+    if (userInfo[_msgSender()].stakingIds.length == 0) revert NoStakedTokens();
     uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
     if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime(); 
     uint256 stakingId = userInfo[_msgSender()].stakingIds[0];
     uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
-    if (diff <= lock) revert LockedStatus();
+    if (diff <= lock) revert StakingIsLocked();
     
     // calculate the reward amount
     uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
@@ -228,11 +244,11 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    *  claimed reward amount is reflected when next claim reward or standard unstake action
    */
   function claimReward() external nonReentrant {
-    if (treasury == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (treasury == 0) revert TreasuryIsEmpty();
     
     // Check if the user has any staked tokens
     if (userInfo[_msgSender()].stakingIds.length == 0) {
-        revert NoActiveStaking(); // Or handle as needed
+        revert NoStakedTokens();
     }
 
     uint256 claimed;
@@ -272,12 +288,12 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    */
   function forceUnlock(uint256 stakingId) external nonReentrant {
     // check if it is valid
-    if (_msgSender() != depositor[stakingId]) revert InvalidLockPeriod();
+    if (_msgSender() != depositor[stakingId]) revert NotDepositor(_msgSender());
     uint256 diff = block.timestamp - stakeTime[stakingId];
     if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime();
 
     uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
-    if (diff >= lock) revert LockedStatus();
+    if (diff >= lock) revert StakingIsUnlocked();
     uint256 offset = lock - diff;
     //  deposits * 30% * offset / lock
     uint256 reduction = deposits[stakingId] * reductionPercent / MAX_BPS * offset / lock;
@@ -311,7 +327,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    * @param weekNumber the week counter
    */
   function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) onlyGovernment external {
-    if (weekNumber <= lastRewardWeek) revert InvalidLockPeriod();
+    if (weekNumber <= lastRewardWeek) revert WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(weekNumber, lastRewardWeek);
         
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
       totalWeightedScore[i - 1] = _totalWeightedScore;
@@ -399,9 +415,9 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
 
   function addReward() external payable {
 
-    if (_msgSender() != owner()) revert InvalidLockPeriod();
+    if (_msgSender() != owner()) revert NotOwner(_msgSender());
 
-    if (msg.value == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (msg.value == 0) revert CannotAddZeroReward();
 
     uint256 amount = msg.value;
 
@@ -411,7 +427,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function withdrawReward(uint256 amount) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
     if (amount > treasury) {
         amount = treasury;
     }
@@ -424,8 +440,8 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function withdrawDeductedBalance() external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (deductedBalance == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (deductedBalance == 0) revert DeductedBalanceIsZero();
     (bool success, ) = payable(_msgSender()).call{value: deductedBalance}("");
     if (!success) revert TransferFailed();
     emit DeductedBalanceWithdrawn(deductedBalance);
@@ -433,53 +449,53 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function setLockTime(uint256 _lockTime) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_lockTime == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_lockTime == 0) revert LockTimeCannotBeZero();
     emit LockTimeChanged(lockTime, _lockTime);
     lockTime = _lockTime;
   }
 
   function setReductionPercent(uint256 _reductionPercent) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_reductionPercent >= MAX_BPS) revert InvalidLockPeriod();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_reductionPercent >= MAX_BPS) revert ReductionPercentTooHigh();
     emit ReductionPercentChanged(reductionPercent, _reductionPercent);
     reductionPercent = _reductionPercent;
   }
 
   function setRewardDrop(uint256 _rewardDrop) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (totalStaked == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (totalStaked == 0) revert NoStakedTokens();
     uint256 _apr = _rewardDrop * WEEKS_OF_ONE_YEAR * MAX_BPS / totalStaked;
-    if (_apr < MIN_APR || _apr > MAX_APR) revert InvalidLockPeriod();
+    if (_apr < MIN_APR || _apr > MAX_APR) revert APRIsNotBetweenMinumumandMaximumAPR();
     uint256 current = (block.timestamp - startBlockTime) / ONE_WEEK;
     rewardDrop[current] = _rewardDrop;
     emit RewardDropUpdated(_rewardDrop, current);
   }
 
   function transferGovernance(address _newGov) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_newGov == address(0)) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_newGov == address(0)) revert NewGovernmentAddressCannotBeZero();
     emit GovernanceTransferred(_government, _newGov);
     _government = _newGov;
   }
 
   function setActionLimit(uint256 _actionLimit) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_actionLimit == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_actionLimit == 0) revert NewValueCannotBeZero();
     emit ActionLimitChanged(actionLimit, _actionLimit);
     actionLimit = _actionLimit;
   }
 
   function setMaxActiveStake(uint256 _maxActiveStake) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_maxActiveStake == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_maxActiveStake == 0) revert NewValueCannotBeZero();
     emit MaxActiveStakeUpdated(maxActiveStake, _maxActiveStake);
     maxActiveStake = _maxActiveStake;
   }
 
   function setMaxWeeks(uint256 _maxWeeks) external {
-    if (_msgSender() != multiSigWallet) revert InvalidLockPeriod();
-    if (_maxWeeks == 0) revert CannotUnstakeWithinMinimumLockTime();
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_maxWeeks == 0) revert NewValueCannotBeZero();
     MaxWeeks = _maxWeeks;
   }
 

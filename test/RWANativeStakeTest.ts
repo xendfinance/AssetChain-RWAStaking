@@ -276,7 +276,7 @@ describe("RWA Native Stake Contract", function(){
 
       // Now you can test the unstake function
       // await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
-      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWithCustomError(stakeContract, "LockedStatus");
+      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWithCustomError(stakeContract, "StakingIsLocked");
 
       //  Force Unlock staking ID 1
       await stakeContract.connect(addr1).forceUnlock(1);
