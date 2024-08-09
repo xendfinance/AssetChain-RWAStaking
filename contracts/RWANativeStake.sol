@@ -93,7 +93,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   error LockTimeCannotBeZero();
   error TreasuryIsEmpty();
   error NotDepositor(address sender);
-  error NotGovernment();
+  error NotGovernment(address sender);
 
   error WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(uint256 newWeek, uint256 lastUpdated);
   error NotOwner(address sender);
@@ -109,11 +109,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   error RewardDropCannotBeZero();
   error MultiSigWalletCannotBeZeroAddress();
 
- modifier onlyGovernment {
-        revert NotGovernment();
-    _;
-  }
-  
+
   function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
     if (_rewardDrop == 0) revert RewardDropCannotBeZero();
     if (_multiSigWallet == address(0)) revert MultiSigWalletCannotBeZeroAddress();
@@ -330,7 +326,9 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
    * @param _totalWeightedScore total weighted score
    * @param weekNumber the week counter
    */
-  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) onlyGovernment external {
+  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) external {
+    if (_msgSender() != _government) revert NotGovernment(_msgSender());
+
     if (weekNumber <= lastRewardWeek) revert WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(weekNumber, lastRewardWeek);
         
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
