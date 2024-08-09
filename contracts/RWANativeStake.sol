@@ -246,29 +246,29 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   function claimReward() external nonReentrant {
     if (treasury == 0) revert TreasuryIsEmpty();
     
+    uint256 claimed;
+    uint256 reward;
+
     // Check if the user has any staked tokens
-    if (userInfo[_msgSender()].stakingIds.length == 0) {
-        revert NoStakedTokens();
+    if (userInfo[_msgSender()].stakingIds.length != 0) {
+        reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
     }
 
-    uint256 claimed;
-    uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
-
     if (unclaimed[_msgSender()] > 0) {
-      reward += unclaimed[_msgSender()];
-      delete unclaimed[_msgSender()];
+        reward += unclaimed[_msgSender()];
+        delete unclaimed[_msgSender()];
     }
 
     // Check if the reward is zero and revert if so
-    if (reward == 0) revert CannotClaimZeroReward(); 
+    if (reward == 0) revert CannotClaimZeroReward();
 
     if (reward > treasury) {
-      claimed = treasury;
-      unclaimed[_msgSender()] = reward - treasury;
-      treasury = 0;
+        claimed = treasury;
+        unclaimed[_msgSender()] = reward - treasury;
+        treasury = 0;
     } else {
-      claimed = reward;
-      treasury -= reward;
+        claimed = reward;
+        treasury -= reward;
     }
 
     (bool success, ) = payable(_msgSender()).call{value: claimed}("");
@@ -519,6 +519,9 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   }
 
   function _pendingReward(address _user) internal view returns (uint256) {
+    // Check if the user has any staked tokens
+    if (userInfo[_user].stakingIds.length == 0) return 0;
+
     uint256 reward;
     uint256 firstStakingId = userInfo[_user].stakingIds[0];
     uint256 firstStakeWeek = (stakeTime[firstStakingId] - startBlockTime) / ONE_WEEK;
