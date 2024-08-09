@@ -64,10 +64,7 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
 
   mapping (uint256 => uint256) public totalWeightedScore;
 
-  modifier onlyGovernment {
-    require(_msgSender() == _government, "!government");
-    _;
-  }
+ 
 
   event Deposit(address indexed user, uint256 stakingId, uint256 amount, LOCK_PERIOD lockPeriod);
   event Withdraw(address indexed user, uint256 amount, LOCK_PERIOD lockPeriod, uint256 rewardAmount);
@@ -96,6 +93,8 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   error LockTimeCannotBeZero();
   error TreasuryIsEmpty();
   error NotDepositor(address sender);
+  error NotGovernment();
+
   error WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(uint256 newWeek, uint256 lastUpdated);
   error NotOwner(address sender);
   error AmountCannotBeZero();
@@ -110,6 +109,11 @@ contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpg
   error RewardDropCannotBeZero();
   error MultiSigWalletCannotBeZeroAddress();
 
+ modifier onlyGovernment {
+        revert NotGovernment();
+    _;
+  }
+  
   function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
     if (_rewardDrop == 0) revert RewardDropCannotBeZero();
     if (_multiSigWallet == address(0)) revert MultiSigWalletCannotBeZeroAddress();
