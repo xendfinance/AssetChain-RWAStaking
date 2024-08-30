@@ -54,7 +54,7 @@ To get started, follow the steps below:
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/xendfinance/nodesale/CONTRIBUTING.md) for contribution and pull request protocol. We expect contributors to follow our guide when submitting code or comments.
+See [CONTRIBUTING.md](https://github.com/xendfinance/AssetChain-RWAStaking/CONTRIBUTING.md) for contribution and pull request protocol. We expect contributors to follow our guide when submitting code or comments.
 
 ## License
 
@@ -62,13 +62,7 @@ See [CONTRIBUTING.md](https://github.com/xendfinance/nodesale/CONTRIBUTING.md) f
 
 This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
 
-## Contact
+## Support
 
 For questions or suggestions, just say Hi on [Telegram](https://t.me/xendfinancedevs).<br/>
 We're always glad to help.
-
-
-
-
-
-
