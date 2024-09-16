@@ -1,26 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.6.12;
+pragma solidity 0.8.20;
 
-// import "hardhat/console.sol";
-
-import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 /**
   @title Staking implementation 
-  @author tmortred, rony4d
   @notice implemented main interactive functions for staking
  */
-
-contract RWANativeStake is Ownable, ReentrancyGuard {
-
-  using SafeMath for uint256;
-  using SafeERC20 for IERC20;
+contract RWANativeStake is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
 
   struct UserInfo {
     uint256[] stakingIds;
@@ -28,12 +18,12 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     uint256 rewardDebt;
   }
 
-  uint256 constant MAX_BPS = 10_000;  // 10,000 Basis points which is 100% or 10000/100 = 100%
-  uint256 constant WEEKS_OF_ONE_YEAR = 52;
-  uint256 constant ONE_MONTH = 30 * 24 * 60 * 60;
-  uint256 constant ONE_WEEK = 7 * 24 * 60 * 60;
-  uint256 constant MAX_APR = 20_00; // 2,000 Basis points which is 20% or 2000/100 = 20%
-  uint256 constant MIN_APR = 100;
+  uint256 public constant MAX_BPS = 10_000;  // 10,000 Basis points which is 100% or 10000/100 = 100%
+  uint256 public constant WEEKS_OF_ONE_YEAR = 52;
+  uint256 public constant ONE_MONTH = 30 * 24 * 60 * 60;
+  uint256 public constant ONE_WEEK = 7 * 24 * 60 * 60;
+  uint256 public constant MAX_APR = 20_00; // 2,000 Basis points which is 20% or 2000/100 = 20%
+  uint256 public constant MIN_APR = 100;
 
   enum LOCK_PERIOD {
     NO_LOCK,
@@ -44,6 +34,7 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
   }
 
   address private _government;
+  address public multiSigWallet;
 
   mapping (uint256 => uint256) public rewardDrop;
   mapping (address => UserInfo) public userInfo;
@@ -53,28 +44,27 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
   mapping (uint256 => uint256) public stakeTime;
   mapping (address => uint256) public unclaimed;
   mapping (uint256 => address) public stakers;
-  mapping (address => uint256) private stakerIndexMap;       // auxiliary mapping for stakers. it's not used externally
+  mapping (address => uint256) private _stakerIndexMap;       // auxiliary mapping for stakers. it's not used externally
 
   uint256 public lastRewardWeek;
-  uint256 immutable public startBlockTime;
+  uint256 public startBlockTime;
 
   uint256[] public scoreLevels;
   mapping(uint256 => uint256) public rewardMultiplier;
   uint256 public counter;
-  uint256 public reductionPercent = 3_000;
+  uint256 public reductionPercent;
   uint256 public deductedBalance;
-  uint256 public lockTime = ONE_WEEK;           // 7 days   
-  uint256 public actionLimit = 24 * 3600;           // 1 day
-  uint256 public maxActiveStake = 10;
+  uint256 public lockTime;           
+  uint256 public actionLimit;           
+  uint256 public maxActiveStake;
   uint256 public totalStaked;
   uint256 public totalStakers;
   uint256 public treasury;
+  uint256 public MaxWeeks;
+
   mapping (uint256 => uint256) public totalWeightedScore;
 
-  modifier onlyGovernment {
-    require(_msgSender() == _government, "!government");
-    _;
-  }
+ 
 
   event Deposit(address indexed user, uint256 stakingId, uint256 amount, LOCK_PERIOD lockPeriod);
   event Withdraw(address indexed user, uint256 amount, LOCK_PERIOD lockPeriod, uint256 rewardAmount);
@@ -90,12 +80,47 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
   event RewardDropUpdated(uint256 rewardDrop, uint256 weekNumber);
   event DeductedBalanceWithdrawn(uint256 withdrawn);
 
-  constructor(uint256 _rewardDrop) public {
-    require(_rewardDrop != 0, "reward drop can't be zero");
+  // Custom errors
+  error StakedAmountCannotBeZero();
+  error MultipleStakingTypesNotAllowed();
+  error ExceededMaxActiveStake();
+  error ExceededActionLimit();
+  error CannotUnstakeWithinMinimumLockTime();
+  error StakingIsLocked();
+  error TransferFailed();
+  error CannotClaimZeroReward();
+  error StakingIsUnlocked();
+  error LockTimeCannotBeZero();
+  error TreasuryIsEmpty();
+  error NotDepositor(address sender);
+  error NotGovernment(address sender);
+
+  error WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(uint256 newWeek, uint256 lastUpdated);
+  error NotOwner(address sender);
+  error AmountCannotBeZero();
+  error CannotAddZeroReward();
+  error ReductionPercentTooHigh();
+  error APRIsNotBetweenMinumumandMaximumAPR();
+  error NotMultiSig(address sender);
+  error DeductedBalanceIsZero();
+  error NewValueCannotBeZero();
+  error NoStakedTokens();
+  error NewGovernmentAddressCannotBeZero();
+  error RewardDropCannotBeZero();
+  error MultiSigWalletCannotBeZeroAddress();
+
+
+  function initialize(uint256 _rewardDrop, address _multiSigWallet) public initializer {
+    if (_rewardDrop == 0) revert RewardDropCannotBeZero();
+    if (_multiSigWallet == address(0)) revert MultiSigWalletCannotBeZeroAddress();
+    
+    __Ownable_init(_msgSender()); // Initialize Ownable with the contract deployer
+    __ReentrancyGuard_init(); // No arguments needed for ReentrancyGuard
     startBlockTime = block.timestamp;
     rewardDrop[0] = _rewardDrop;
 
     _government = _msgSender();
+    multiSigWallet = _multiSigWallet;
 
     scoreLevels.push(0);
     scoreLevels.push(500);
@@ -117,6 +142,12 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     rewardMultiplier[scoreLevels[7]] = 2600;
     rewardMultiplier[scoreLevels[8]] = 3500;
     rewardMultiplier[scoreLevels[9]] = 6000;
+
+    reductionPercent = 3_000;
+    lockTime = ONE_WEEK;           // 7 days   
+    actionLimit = 24 * 3600;           // 1 day
+    maxActiveStake = 10;
+    MaxWeeks = 52; // This sets a limit to the maximum number of weeks that can be used to calculate rewards to prevent consuming excess gas and failing the transaction when gas is higher than max block gas
   }
 
   /**
@@ -128,36 +159,37 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    */
   function stake( LOCK_PERIOD _lockPeriod) external payable nonReentrant {
     // check if stake action valid
-    require(msg.value > 0, "Cannot stake 0 RWA");
+    if (msg.value == 0) revert StakedAmountCannotBeZero();
 
     uint256 _amount = msg.value;
 
-    uint256 diff = block.timestamp.sub(userInfo[_msgSender()].lastStakeTime);
-    require(diff > actionLimit, "staking too much in short period is not valid");
+    uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
+    if (diff <= actionLimit) revert ExceededActionLimit();
     uint256[] memory stakingIds = userInfo[_msgSender()].stakingIds;
     if (stakingIds.length != 0) {
-      require(lockPeriod[stakingIds[0]] == LOCK_PERIOD.NO_LOCK && _lockPeriod == LOCK_PERIOD.NO_LOCK, "multi-staking works only for standard vault");
-      require(stakingIds.length < maxActiveStake, "exceed maxActiveStake");
+      if (lockPeriod[stakingIds[0]] != LOCK_PERIOD.NO_LOCK || _lockPeriod != LOCK_PERIOD.NO_LOCK) {
+        revert MultipleStakingTypesNotAllowed();
+      }
+      if (stakingIds.length >= maxActiveStake) {
+        revert ExceededMaxActiveStake();
+      }
     }
 
     // update state variables
-    counter = counter.add(1);
+    counter++;
     if (stakingIds.length == 0) {
-      stakerIndexMap[_msgSender()] = totalStakers;
+      _stakerIndexMap[_msgSender()] = totalStakers;
       stakers[totalStakers] = _msgSender();
       totalStakers++;
     }
     
     deposits[counter] = _amount;
-    totalStaked = totalStaked.add(_amount);
+    totalStaked += _amount;
     depositor[counter] = _msgSender();
     stakeTime[counter] = block.timestamp;
     userInfo[_msgSender()].lastStakeTime = block.timestamp;
     lockPeriod[counter] = _lockPeriod;
     userInfo[_msgSender()].stakingIds.push(counter);
-
-    // transfer tokens
-    // token.safeTransferFrom(_msgSender(), address(this), _amount);
 
     emit Deposit(_msgSender(), counter, _amount, _lockPeriod);
   }
@@ -169,41 +201,38 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    */
   function unstake() external nonReentrant {
     // check if unstake action is valid
-    require(userInfo[_msgSender()].stakingIds.length > 0, "no active staking");
-    uint256 diff = block.timestamp.sub(userInfo[_msgSender()].lastStakeTime);
-    require(diff > lockTime, "can't unstake within minimum lock time"); 
+    if (userInfo[_msgSender()].stakingIds.length == 0) revert NoStakedTokens();
+    uint256 diff = block.timestamp - userInfo[_msgSender()].lastStakeTime;
+    if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime(); 
     uint256 stakingId = userInfo[_msgSender()].stakingIds[0];
-    uint256 lock = uint256(lockPeriod[stakingId]).mul(3).mul(ONE_MONTH);
-    require(diff > lock, "locked");
+    uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
+    if (diff <= lock) revert StakingIsLocked();
     
     // calculate the reward amount
-    uint256 reward = _pendingReward(_msgSender()).sub(userInfo[_msgSender()].rewardDebt);
+    uint256 reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
     if (reward > treasury) {
-      unclaimed[_msgSender()] = reward.sub(treasury);
+      unclaimed[_msgSender()] = reward - treasury;
       reward = treasury;
-      delete treasury;
+      treasury = 0;
     } else {
-      treasury = treasury.sub(reward);
+      treasury -= reward;
     }
     
     // transfer tokens to the _msgSender()  
-    // uint256 stakeAmount = _getTotalStaked(_msgSender());
-    // token.safeTransfer(_msgSender(), stakeAmount.add(reward));
-
-    // Update to use native coin for unstaking
     uint256 stakeAmount = _getTotalStaked(_msgSender());
-    payable(_msgSender()).transfer(stakeAmount.add(reward));
+    (bool success, ) = payable(_msgSender()).call{value: stakeAmount + reward}("");
+    if (!success) revert TransferFailed();
 
     // update the state variables
-    totalStaked = totalStaked.sub(stakeAmount);
+    totalStaked -= stakeAmount;
     delete userInfo[_msgSender()];
     
-    uint256 csi = stakerIndexMap[_msgSender()];
+    uint256 csi = _stakerIndexMap[_msgSender()];
     totalStakers--;
     stakers[csi] = stakers[totalStakers];
-    stakerIndexMap[stakers[csi]] = csi;
+    _stakerIndexMap[stakers[csi]] = csi;
     delete stakers[totalStakers];
-    delete stakerIndexMap[_msgSender()];
+    delete _stakerIndexMap[_msgSender()];
     
     emit Withdraw(_msgSender(), stakeAmount, lockPeriod[stakingId], reward);
   }
@@ -215,34 +244,38 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    *  claimed reward amount is reflected when next claim reward or standard unstake action
    */
   function claimReward() external nonReentrant {
-    require(treasury > 0, "reward pool is empty");
+    if (treasury == 0) revert TreasuryIsEmpty();
     
     uint256 claimed;
-    if (unclaimed[_msgSender()] > 0) {
-      require(unclaimed[_msgSender()] <= treasury, "insufficient");
-      // token.safeTransfer(_msgSender(), unclaimed[_msgSender()]); 
-      claimed = unclaimed[_msgSender()];
-      // Update to use native coin for reward
-      payable(_msgSender()).transfer(claimed);
-      delete unclaimed[_msgSender()];
-    } else {
-      uint256 reward = _pendingReward(_msgSender()).sub(userInfo[_msgSender()].rewardDebt);
-      require(reward > 0, "pending reward amount is zero");
+    uint256 reward;
 
-      if (reward >= treasury) {
-        reward = treasury;
-        delete treasury;
-      } else {
-        treasury = treasury.sub(reward);
-      }
-      
-      // token.safeTransfer(_msgSender(), reward);
-      claimed = reward;
-      // Update to use native coin for staking
-      payable(_msgSender()).transfer(claimed);
-      userInfo[_msgSender()].rewardDebt = userInfo[_msgSender()].rewardDebt.add(reward);
+    // Check if the user has any staked tokens
+    if (userInfo[_msgSender()].stakingIds.length != 0) {
+        reward = _pendingReward(_msgSender()) - userInfo[_msgSender()].rewardDebt;
     }
-    
+
+    if (unclaimed[_msgSender()] > 0) {
+        reward += unclaimed[_msgSender()];
+        delete unclaimed[_msgSender()];
+    }
+
+    // Check if the reward is zero and revert if so
+    if (reward == 0) revert CannotClaimZeroReward();
+
+    if (reward > treasury) {
+        claimed = treasury;
+        unclaimed[_msgSender()] = reward - treasury;
+        treasury = 0;
+    } else {
+        claimed = reward;
+        treasury -= reward;
+    }
+
+    (bool success, ) = payable(_msgSender()).call{value: claimed}("");
+    if (!success) revert TransferFailed();
+
+    userInfo[_msgSender()].rewardDebt += claimed;
+
     emit RewardClaim(_msgSender(), claimed);
   }
 
@@ -255,36 +288,34 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    */
   function forceUnlock(uint256 stakingId) external nonReentrant {
     // check if it is valid
-    require(_msgSender() == depositor[stakingId], "!depositor");
-    uint256 diff = block.timestamp.sub(stakeTime[stakingId]);
-    require(diff > lockTime, "can't unstake within minimum lock time");
+    if (_msgSender() != depositor[stakingId]) revert NotDepositor(_msgSender());
+    uint256 diff = block.timestamp - stakeTime[stakingId];
+    if (diff <= lockTime) revert CannotUnstakeWithinMinimumLockTime();
 
-    uint256 lock = uint256(lockPeriod[stakingId]).mul(3).mul(ONE_MONTH);
-    require(diff < lock, "unlocked status");
-    uint256 offset = lock.sub(diff);
+    uint256 lock = uint256(lockPeriod[stakingId]) * 3 * ONE_MONTH;
+    if (diff >= lock) revert StakingIsUnlocked();
+    uint256 offset = lock - diff;
     //  deposits * 30% * offset / lock
-    uint256 reduction = deposits[stakingId].mul(reductionPercent).div(MAX_BPS).mul(offset).div(lock);
+    uint256 reduction = deposits[stakingId] * reductionPercent / MAX_BPS * offset / lock;
     
-    // token.safeTransfer(_msgSender(), deposits[stakingId].sub(reduction));
+    (bool success, ) = payable(_msgSender()).call{value: deposits[stakingId] - reduction}("");
+    if (!success) revert TransferFailed();
 
-    // Update to use native coin for force unlock
-    payable(_msgSender()).transfer(deposits[stakingId].sub(reduction));
-
-    deductedBalance = deductedBalance.add(reduction);
+    deductedBalance += reduction;
     
     emit ForceUnlock(_msgSender(), stakingId, deposits[stakingId], lockPeriod[stakingId], offset);
 
     // update the state variables
-    totalStaked = totalStaked.sub(deposits[stakingId]);
+    totalStaked -= deposits[stakingId];
     delete deposits[stakingId];
     delete userInfo[_msgSender()];
 
-    uint256 csi = stakerIndexMap[_msgSender()];
+    uint256 csi = _stakerIndexMap[_msgSender()];
     totalStakers--;
     stakers[csi] = stakers[totalStakers];
-    stakerIndexMap[stakers[csi]] = csi;
+    _stakerIndexMap[stakers[csi]] = csi;
     delete stakers[totalStakers];
-    delete stakerIndexMap[_msgSender()];
+    delete _stakerIndexMap[_msgSender()];
   }
 
   /**
@@ -295,34 +326,34 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    * @param _totalWeightedScore total weighted score
    * @param weekNumber the week counter
    */
-  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) external onlyGovernment {
-    require(weekNumber > lastRewardWeek, "invalid call");
+  function updatePool(uint256 _totalWeightedScore, uint256 weekNumber) external {
+    if (_msgSender() != _government) revert NotGovernment(_msgSender());
+
+    if (weekNumber <= lastRewardWeek) revert WeekNumberCannotBeLessThanOrEqualToLastRewardWeek(weekNumber, lastRewardWeek);
         
     for (uint256 i = lastRewardWeek + 1; i <= weekNumber; i++) {
-      totalWeightedScore[i-1] = _totalWeightedScore;
-      if (i > 1 && rewardDrop[i-1] == 0) {
-        rewardDrop[i-1] = rewardDrop[i-2].sub(rewardDrop[i-2].div(100));
+      totalWeightedScore[i - 1] = _totalWeightedScore;
+      if (i > 1 && rewardDrop[i - 1] == 0) {
+        rewardDrop[i - 1] = rewardDrop[i - 2] - rewardDrop[i - 2] / 100;
       }
       
       uint256 _apr;
       if (totalStaked > 0) {
-        _apr = rewardDrop[i-1].mul(WEEKS_OF_ONE_YEAR).mul(MAX_BPS).div(totalStaked);
+        _apr = rewardDrop[i - 1] * WEEKS_OF_ONE_YEAR * MAX_BPS / totalStaked;
       } else {
         _apr = MAX_APR;
       }
       
       if (_apr > MAX_APR) {
-        rewardDrop[i-1] = totalStaked.mul(MAX_APR).div(WEEKS_OF_ONE_YEAR).div(MAX_BPS);
+        rewardDrop[i - 1] = totalStaked * MAX_APR / WEEKS_OF_ONE_YEAR / MAX_BPS;
 
       } else if (_apr < MIN_APR) {
-        rewardDrop[i-1] = totalStaked.mul(MIN_APR).div(WEEKS_OF_ONE_YEAR).div(MAX_BPS).add(1);
+        rewardDrop[i - 1] = totalStaked * MIN_APR / WEEKS_OF_ONE_YEAR / MAX_BPS + 1;
       }
 
     }
 
     lastRewardWeek = weekNumber;
-
-
   }
 
   //////////////////////////////////////
@@ -337,12 +368,12 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
    * @return _apr annual percentage rate
    */
   function apr() external view returns (uint256) {
-    uint256 current = block.timestamp.sub(startBlockTime).div(ONE_WEEK);
+    uint256 current = (block.timestamp - startBlockTime) / ONE_WEEK;
     uint256 _apr;
     if (totalStaked == 0 || current == 0) {
       _apr = MAX_APR;
     } else {
-      _apr = rewardDrop[current - 1].mul(WEEKS_OF_ONE_YEAR).mul(MAX_BPS).div(totalStaked);
+      _apr = rewardDrop[current - 1] * WEEKS_OF_ONE_YEAR * MAX_BPS / totalStaked;
     }
     
     return _apr;
@@ -372,7 +403,7 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     if (unclaimed[_user] > 0) {
       return unclaimed[_user];
     } else {
-      return _pendingReward(_user).sub(userInfo[_user].rewardDebt);
+      return _pendingReward(_user) - userInfo[_user].rewardDebt;
     }
   }
 
@@ -384,81 +415,90 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
   ////    Admin functions   ////
   //////////////////////////////
 
-  function addReward() external payable onlyOwner {
-    // require(IERC20(token).balanceOf(_msgSender()) >= amount, "not enough tokens to deliver");
-    // IERC20(token).safeTransferFrom(_msgSender(), address(this), amount);
-    // treasury = treasury.add(amount);
+  function addReward() external payable {
 
-    // Update to use native coin for adding reward
+    if (_msgSender() != owner()) revert NotOwner(_msgSender());
 
-    require(msg.value > 0, "Cannot add 0 RWA reward");
+    if (msg.value == 0) revert CannotAddZeroReward();
 
     uint256 amount = msg.value;
 
-    treasury = treasury.add(amount);
+    treasury += amount;
 
     emit RewardAdded(amount, treasury);
   }
 
-  function withdrawReward(uint256 amount) external onlyOwner {
+  function withdrawReward(uint256 amount) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
     if (amount > treasury) {
-      amount = treasury;
+        amount = treasury;
     }
-    // IERC20(token).safeTransfer(_msgSender(), amount);
-    // Update to use native coin for withdrawing reward
-    payable(_msgSender()).transfer(amount);
+    (bool success, ) = payable(_msgSender()).call{value: amount}("");
+    if (!success) revert TransferFailed();
 
-    treasury = treasury.sub(amount);
+    treasury -= amount;
 
     emit RewardWithdrawn(amount, treasury);
   }
 
-  function withdrawDeductedBalance() external onlyOwner {
-    require(deductedBalance > 0, "no balance to withdraw");
-    // IERC20(token).safeTransfer(_msgSender(), deductedBalance);
-    payable(_msgSender()).transfer(deductedBalance);
+  function withdrawDeductedBalance() external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (deductedBalance == 0) revert DeductedBalanceIsZero();
+    (bool success, ) = payable(_msgSender()).call{value: deductedBalance}("");
+    if (!success) revert TransferFailed();
     emit DeductedBalanceWithdrawn(deductedBalance);
     delete deductedBalance;
   }
 
-  function setLockTime(uint256 _lockTime) external onlyOwner {
-    require(_lockTime != 0, "!zero");
+  function setLockTime(uint256 _lockTime) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_lockTime == 0) revert LockTimeCannotBeZero();
     emit LockTimeChanged(lockTime, _lockTime);
     lockTime = _lockTime;
   }
 
-  function setReductionPercent(uint256 _reductionPercent) external onlyOwner {
-    require(_reductionPercent < MAX_BPS, "overflow");
+  function setReductionPercent(uint256 _reductionPercent) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_reductionPercent >= MAX_BPS) revert ReductionPercentTooHigh();
     emit ReductionPercentChanged(reductionPercent, _reductionPercent);
     reductionPercent = _reductionPercent;
   }
 
-  function setRewardDrop(uint256 _rewardDrop) external onlyOwner {
-    require(totalStaked > 0, "no staked tokens");
-    uint256 _apr = _rewardDrop.mul(WEEKS_OF_ONE_YEAR).mul(MAX_BPS).div(totalStaked);
-    require(_apr >= MIN_APR, "not meet MIN APR");
-    require(_apr <= MAX_APR, "not meet MAX APR");
-    uint256 current = block.timestamp.sub(startBlockTime).div(ONE_WEEK);
+  function setRewardDrop(uint256 _rewardDrop) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (totalStaked == 0) revert NoStakedTokens();
+    uint256 _apr = _rewardDrop * WEEKS_OF_ONE_YEAR * MAX_BPS / totalStaked;
+    if (_apr < MIN_APR || _apr > MAX_APR) revert APRIsNotBetweenMinumumandMaximumAPR();
+    uint256 current = (block.timestamp - startBlockTime) / ONE_WEEK;
     rewardDrop[current] = _rewardDrop;
     emit RewardDropUpdated(_rewardDrop, current);
   }
 
-  function transferGovernance(address _newGov) external onlyOwner {
-    require(_newGov != address(0), "new governance is the zero address");
+  function transferGovernance(address _newGov) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_newGov == address(0)) revert NewGovernmentAddressCannotBeZero();
     emit GovernanceTransferred(_government, _newGov);
     _government = _newGov;
   }
 
-  function setActionLimit(uint256 _actionLimit) external onlyOwner {
-    require(_actionLimit != 0, "!zero");
+  function setActionLimit(uint256 _actionLimit) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_actionLimit == 0) revert NewValueCannotBeZero();
     emit ActionLimitChanged(actionLimit, _actionLimit);
     actionLimit = _actionLimit;
   }
 
-  function setMaxActiveStake(uint256 _maxActiveStake) external onlyOwner {
-    require(_maxActiveStake !=0, "!zero");
+  function setMaxActiveStake(uint256 _maxActiveStake) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_maxActiveStake == 0) revert NewValueCannotBeZero();
     emit MaxActiveStakeUpdated(maxActiveStake, _maxActiveStake);
     maxActiveStake = _maxActiveStake;
+  }
+
+  function setMaxWeeks(uint256 _maxWeeks) external {
+    if (_msgSender() != multiSigWallet) revert NotMultiSig(_msgSender());
+    if (_maxWeeks == 0) revert NewValueCannotBeZero();
+    MaxWeeks = _maxWeeks;
   }
 
   /////////////////////////////////
@@ -470,37 +510,43 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     uint256 _totalStaked;
     uint256[] memory stakingIds = userInfo[user].stakingIds;
     // the length of `stakingIds` is limited to `maxActiveStake` to avoid too much gas consumption.
-    for (uint i; i < stakingIds.length; i++) {
+    for (uint i = 0; i < stakingIds.length; i++) {
       uint256 stakingId = stakingIds[i];
-      _totalStaked = _totalStaked.add(deposits[stakingId]);
+      _totalStaked += deposits[stakingId];
     }
 
     return _totalStaked;
   }
 
   function _pendingReward(address _user) internal view returns (uint256) {
+    // Check if the user has any staked tokens
+    if (userInfo[_user].stakingIds.length == 0) return 0;
+
     uint256 reward;
     uint256 firstStakingId = userInfo[_user].stakingIds[0];
-    uint256 firstStakeWeek = stakeTime[firstStakingId].sub(startBlockTime).div(ONE_WEEK);
-    uint256 current = block.timestamp.sub(startBlockTime).div(ONE_WEEK);
-    for (uint i = firstStakeWeek; i <= current; i++) {
-      uint256 weightedScore = _getWeightedScore(_user, i);
-      if (totalWeightedScore[i] != 0) {
-        reward = reward.add(rewardDrop[i].mul(weightedScore).div(totalWeightedScore[i]));
-      }
+    uint256 firstStakeWeek = (stakeTime[firstStakingId] - startBlockTime) / ONE_WEEK;
+    uint256 current = (block.timestamp - startBlockTime) / ONE_WEEK;
+    uint256 maxWeek = firstStakeWeek + MaxWeeks;
+
+    for (uint i = firstStakeWeek; i <= current && i <= maxWeek; i++) {
+        uint256 weightedScore = _getWeightedScore(_user, i);
+        if (totalWeightedScore[i] != 0) {
+            reward += rewardDrop[i] * weightedScore / totalWeightedScore[i];
+        }
     }
     return reward;
   }
+
 
   function _getWeightedScore(address _user, uint256 weekNumber) internal view returns (uint256) {
     // calculate the basic score
     uint256 score;
     uint256[] memory stakingIds = userInfo[_user].stakingIds;
     // the length of `stakingIds` is limited to `maxActiveStake` to avoid too much gas consumption.
-    for (uint i; i < stakingIds.length; i++) {
+    for (uint i = 0; i < stakingIds.length; i++) {
       uint256 stakingId = stakingIds[i];
       uint256 _score = getScore(stakingId, weekNumber);
-      score = score.add(_score);
+      score += _score;
 
     }
 
@@ -508,9 +554,9 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
     if (score == 0) return 0;
 
     uint256 weightedScore;
-    for (uint i; i < scoreLevels.length; i++) {
+    for (uint i = 0; i < scoreLevels.length; i++) {
       if (score > scoreLevels[i]) {
-        weightedScore = score.mul(rewardMultiplier[scoreLevels[i]]);
+        weightedScore = score * rewardMultiplier[scoreLevels[i]];
       } else {
         return weightedScore;
       }
@@ -522,15 +568,15 @@ contract RWANativeStake is Ownable, ReentrancyGuard {
 
   function getScore(uint256 stakingId, uint256 weekNumber) internal view returns (uint256) {
     uint256 score;
-    uint256 stakeWeek = stakeTime[stakingId].sub(startBlockTime).div(ONE_WEEK);
+    uint256 stakeWeek = (stakeTime[stakingId] - startBlockTime) / ONE_WEEK;
     if (stakeWeek > weekNumber) return 0;
-    uint256 diff = weekNumber.sub(stakeWeek) > WEEKS_OF_ONE_YEAR ? WEEKS_OF_ONE_YEAR : weekNumber.sub(stakeWeek);
-    uint256 lockScore = deposits[stakingId].mul(uint256(lockPeriod[stakingId])).mul(3).div(12);
-    score = deposits[stakingId].mul(diff + 1).div(WEEKS_OF_ONE_YEAR).add(lockScore);
+    uint256 diff = weekNumber - stakeWeek > WEEKS_OF_ONE_YEAR ? WEEKS_OF_ONE_YEAR : weekNumber - stakeWeek;
+    uint256 lockScore = deposits[stakingId] * uint256(lockPeriod[stakingId]) * 3 / 12;
+    score = deposits[stakingId] * (diff + 1) / WEEKS_OF_ONE_YEAR + lockScore;
     if (score > deposits[stakingId]) {
-      score = deposits[stakingId].div(1e18);
+      score = deposits[stakingId] / 1e18;
     } else {
-      score = score.div(1e18);
+      score = score / 1e18;
     }
 
     return score;

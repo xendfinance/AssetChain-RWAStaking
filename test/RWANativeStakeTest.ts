@@ -5,6 +5,10 @@ import {
   import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
   import { expect } from "chai";
   import hre from "hardhat";
+  import { ethers, upgrades } from "hardhat";
+
+  
+  // Import upgrades from @openzeppelin/hardhat-upgrades
 
   
 describe("RWA Native Stake Contract", function(){
@@ -19,14 +23,17 @@ describe("RWA Native Stake Contract", function(){
 
     async function deployContractFixture(){
 
-      
+
       const [owner, addr1, addr2] = await hre.ethers.getSigners();
     
       const rewardDrop = hre.ethers.parseEther(INITIAL_REWARD_DROP.toString());  // Convert 27500 to wei
       const stakeContractFactory = await hre.ethers.getContractFactory("RWANativeStake");
-      const stakeContract = await stakeContractFactory.deploy(rewardDrop);
 
-    
+      const stakeContract = await upgrades.deployProxy(stakeContractFactory, [rewardDrop,owner.address,], {initializer: "initialize"});
+
+      // console.log(stakeContract);
+      console.log("RWANativeStake Proxy deployed to:", stakeContract.target);
+
       return { stakeContract, owner, addr1, addr2 };
       
     }
@@ -204,7 +211,8 @@ describe("RWA Native Stake Contract", function(){
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
       
       // Now you can test the unstake function
-      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      // await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWithCustomError(stakeContract, "CannotUnstakeWithinMinimumLockTime"); // Replace with the actual custom error name
       //  Stake is still active so stakingIDs will still be 1
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
 
@@ -222,7 +230,9 @@ describe("RWA Native Stake Contract", function(){
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1);
       
       // Now you can test the unstake function
-      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      // await expect(stakeContract.connect(owner).unstake()).to.be.revertedWith("can't unstake within minimum lock time");
+      await expect(stakeContract.connect(owner).unstake()).to.be.revertedWithCustomError(stakeContract, "CannotUnstakeWithinMinimumLockTime"); // Replace with the actual custom error name
+
       //  Stake is still active so stakingIDs will still be 1
       expect(await stakeContract.getStakingIds(owner.address)).to.have.lengthOf(1); 
 
@@ -265,8 +275,9 @@ describe("RWA Native Stake Contract", function(){
       currentBlock = await time.latestBlock();
 
       // Now you can test the unstake function
-      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
-      
+      // await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWith("locked");
+      await expect(stakeContract.connect(addr1).unstake()).to.be.revertedWithCustomError(stakeContract, "StakingIsLocked");
+
       //  Force Unlock staking ID 1
       await stakeContract.connect(addr1).forceUnlock(1);
 
@@ -576,9 +587,29 @@ describe("RWA Native Stake Contract", function(){
 
 
   });
+
+  describe("Upgrade Contract", function(){
+
+      it("Should upgrade contract and call the function in new contract implementation", async function(){
+
+        //  Deploy the initial implementation:
+        const { stakeContract, owner } = await loadFixture(deployContractFixture);
+
+        //  Upgrade to a new implementation:
+        const RWANativeStakeV2 = await ethers.getContractFactory("RWANativeStakeV2");
+        const upgraded = await upgrades.upgradeProxy(await stakeContract.target, RWANativeStakeV2);
+
+        console.log("Proxy upgraded at:", upgraded.target);
+
+        expect(await upgraded.version()).to.equal("v2");
+        expect(await stakeContract.target).to.equal(upgraded.target);
+
+      });
+  });
+
   describe("Claim Reward Operation", function(){
 
-  })
+  });
 
 
   
